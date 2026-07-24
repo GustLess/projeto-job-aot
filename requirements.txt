@@ -1,0 +1,22 @@
+# Core
+requests
+pandas
+numpy
+python-dotenv
+
+# Machine Learning
+scikit-learn
+joblib
+
+# Streaming & Big Data
+confluent-kafka
+pyspark
+
+# Visualization
+matplotlib
+seaborn
+streamlit
+
+# Development
+jupyterlab
+ipykernel

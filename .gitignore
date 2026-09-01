@@ -1,5 +1,7 @@
 data/*
 __pycache__/
+*.pyc
 .env
 .ipynb_checkpoints/
 docker/volumes/
+.Trash-0/

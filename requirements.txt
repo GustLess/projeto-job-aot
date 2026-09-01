@@ -20,3 +20,4 @@ streamlit
 # Development
 jupyterlab
 ipykernel
+kafka-python==2.2.15

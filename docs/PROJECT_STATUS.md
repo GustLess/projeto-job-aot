@@ -1,40 +1,45 @@
 # Estado do projeto
 
-## Fluxo implementado
+## Etapa 2 implementada
 
-```text
-SensorSimulator
-      ↓
-SensorProducer
-      ↓
-Kafka: sensor-readings
-      ↓
-SensorConsumer
-      ↓
-impressão no terminal
-```
+Fluxo atual: simulador → producer → Kafka `sensor-readings` → consumer →
+validação → detector baseado em regras → classificação no terminal.
 
-O simulador cria leituras com temperatura, umidade, pressão, identificador e timestamp. O producer serializa cada leitura como JSON e publica no tópico `sensor-readings`. O consumer lê esse tópico, converte o JSON em `SensorReading` e imprime seus campos.
+- Contrato v1 com oito campos, UUID por evento e horário UTC explícito.
+- Validação estrutural e de tipos separada da classificação de valores extremos.
+- Detector com faixas inclusivas para temperatura, umidade e pressão,
+  preservando todas as violações de uma leitura.
+- Consumer imprime `NORMAL` ou `ANOMALY`, metadados e regras disparadas.
+  Mensagens inválidas são reportadas e ignoradas sem interromper o laço.
+- Producer, simulador, configuração Kafka e infraestrutura preservados.
+- API, dashboard, ML, Data Lake e persistência não implementados.
+- `src/ingestion.py` continua um experimento externo ao pipeline.
 
-## Estado das funcionalidades
+Contrato, limites, justificativa e limitações estão em `ARCHITECTURE.md`.
+As decisões de compatibilidade estão em `DECISIONS.md`.
 
-- Simulação de leituras: implementada em `src/collectors/simulator.py`.
-- Modelo e serialização de leituras: implementados em `src/models/sensor_reading.py`.
-- Publicação Kafka: implementada em `src/producers/sensor_producer.py` usando `kafka-python`. O producer aguarda o resultado do envio e reporta erros Kafka básicos.
-- Consumo Kafka e impressão no terminal: implementados em `src/consumers/sensor_consumer.py` usando `kafka-python`. Mensagens com bytes/JSON inválidos ou dados incompatíveis são reportadas e ignoradas; erros Kafka básicos são reportados.
-- Endereço do broker: producer e consumer compartilham `KAFKA_BOOTSTRAP_SERVERS`, com padrão `kafka:29092`; o serviço `dev-env` recebe esse padrão via Compose. O host pode definir `localhost:9092`.
-- Consulta experimental à API Array of Things: existe em `src/ingestion.py`, mas é independente do pipeline descrito acima.
-- Detector de anomalias: **NÃO implementado**. O simulador pode gerar leituras fora das faixas usuais; isso não é um detector.
-- Persistência: **NÃO implementada**.
-- API do projeto: **NÃO implementada**. `src/ingestion.py` é um cliente experimental de API externa, não uma API servida pelo projeto.
-- Dashboard: **NÃO implementado**.
-- Testes unitários: implementados em `tests/unit/`, incluindo cobertura do modelo, serialização, validações, simulador e configuração dos clientes com mocks. **Ainda não executados nesta auditoria:** o ambiente não tem pytest nem kafka-python instalados.
-- Teste de integração Kafka: implementado separadamente em `tests/integration/`, opt-in por `RUN_KAFKA_INTEGRATION=1`. **Não verificado:** o daemon Docker não está acessível neste ambiente.
+## Verificação em 2026-10-01
 
-## Ambiente e pendências
+Os 14 testes unitários iniciais passaram no `dev-env` antes das alterações.
+Após a implementação, 64 testes unitários passaram (0 falhas; 2 testes de
+integração desmarcados nesse comando). A integração é opt-in com marcador
+`integration` e `RUN_KAFKA_INTEGRATION=1`; cobre evento normal e anômalo,
+com preservação do round trip e classificação pelo processamento do consumer.
 
-O Compose declara Kafka e ZooKeeper e um container `dev-env` com Jupyter Lab como comando padrão. O serviço Kafka tem healthcheck de disponibilidade do broker e `dev-env` aguarda o serviço ficar saudável. Os clientes usam configuração de ambiente compartilhada; o valor configurado no Compose é `kafka:29092`, e para o host o listener anunciado é `localhost:9092`.
+O Python do host não tinha pip/pytest e seu módulo venv não tinha ensurepip.
+Os testes principais usam Python 3.11 do container existente. O primeiro
+`up --build -d` falhou internamente no Bake; repetir com `COMPOSE_BAKE=false`
+permitiu iniciar os serviços, sem alterar arquivos Docker.
 
-`requirements.txt` contém `kafka-python==2.2.15` e `confluent-kafka`; o pipeline atual importa `kafka-python`. Um script isolado em `.ipynb_checkpoints/teste_kafka-checkpoint.py` usa `confluent-kafka` e outro tópico, mas não integra o pipeline.
+Os dois cenários Kafka passaram (2 PASS, 0 FAIL, 0 SKIPPED), com 64 testes
+unitários desmarcados no comando de integração. Total executado após as alterações:
+66 PASS, 0 FAIL, 0 SKIPPED. `git diff --check` e a validação estática do Compose
+passaram. Os serviços iniciados para a validação foram encerrados com `down`.
 
-O arquivo `docker/docker-compose.yml` fixa Kafka em `7.5.0`, mas usa `latest` para ZooKeeper, o que torna essa imagem mutável. O Dockerfile usa `python:3.11-slim`, também sem digest de imagem. Essas opções foram registradas, não alteradas. A validação estática `docker compose config --quiet` passou; execução real do broker e do pipeline ponta a ponta não foi possível, portanto o fluxo não está confirmado como funcional ponta a ponta.
+## Pendências
+
+Limites específicos para sensores reais precisam de calibração. Auto commit
+permanece habilitado; avaliar garantias de processamento antes de introduzir
+efeitos persistentes. ZooKeeper continua usando imagem `latest`, e Python
+`3.11-slim` não tem digest fixado no Dockerfile. Essas decisões de infraestrutura
+não foram alteradas nesta etapa.

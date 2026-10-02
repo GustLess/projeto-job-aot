@@ -11,10 +11,30 @@
 - Compose verifica disponibilidade Kafka por healthcheck e aguarda o broker ficar saudável antes de iniciar `dev-env`.
 - Testes unitários foram criados e o teste de integração Kafka está isolado e exige `RUN_KAFKA_INTEGRATION=1`.
 - Kafka está fixado em `confluentinc/cp-kafka:7.5.0`; ZooKeeper usa `confluentinc/cp-zookeeper:latest`.
-- O pipeline termina imprimindo a leitura no terminal. Não há confirmação de processamento posterior ou armazenamento.
+- O pipeline termina imprimindo a classificação e todas as violações no terminal. Não há armazenamento de resultados.
 
 ## Pendências que exigem decisão
 
 - **Confirmação de consumo:** escolher política de commit. O auto commit atual pode avançar offsets antes de um processamento confiável, enquanto o efeito atual é apenas imprimir no terminal. Se o processamento passar a persistir/produzir resultado, avaliar commit manual somente após sucesso do processamento, com tratamento de falhas e reentrega. Não mudar o comportamento nesta etapa.
 - **Reprodutibilidade de imagens:** decidir política de pinagem para ZooKeeper (`latest`) e para a imagem Python, sem atualização automática de versões.
-- **Validação da infraestrutura:** executar testes unitários e de integração em ambiente com pytest, kafka-python e Docker disponíveis. O Compose validou estaticamente, mas Kafka e fluxo ponta a ponta ainda não foram verificados.
+- **Validação contínua:** testes unitários e integração Kafka passaram na etapa 2; manter a integração opt-in em ambientes com broker disponível.
+
+## Etapa 2 — contrato e processamento (2026-10-01)
+
+- Modelo dataclass e biblioteca padrão; nenhuma nova dependência no projeto.
+- `event_id` automático UUID v4 e `schema_version=1` preservam chamadas locais
+  existentes. JSON exige todos os campos, incluindo source e novos metadados:
+  eventos legados incompletos são reportados/ignorados, evitando criar identidades
+  diferentes para a mesma mensagem a cada consumo. IDs externos não vazios são
+  aceitos; deduplicação/global uniqueness não implementadas.
+- Timestamp ISO 8601 deve ter offset UTC explícito. Números devem ser finitos;
+  textos e booleanos não são convertidos silenciosamente em medidas.
+- Validação não usa faixas do detector; extremos finitos podem ser válidos.
+- Faixas inclusivas centralizadas em `DEFAULT_RULES`: temperatura [20,30],
+  umidade [40,75], pressão [1000,1025]. Correspondem aos intervalos normais do
+  simulador e detectam todos os extremos que ele injeta deliberadamente.
+- Resultado estruturado com todas as violações, identidade do evento,
+  nome/versão do detector e horário UTC da detecção. Não há histórico, aprendizado,
+  calibração real, persistência nem tópico adicional.
+- Consumer mantém auto commit e configuração Kafka. Processamento exposto como
+  função pura quanto a efeitos externos; laço imprime e ignora mensagens inválidas.

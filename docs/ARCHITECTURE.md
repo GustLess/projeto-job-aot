@@ -3,35 +3,77 @@
 ## Pipeline Kafka
 
 ```text
-SensorSimulator
-      ↓ cria SensorReading
-SensorProducer
-      ↓ JSON, tópico sensor-readings
-Kafka (listener interno: kafka:29092)
-      ↓ grupo anomaly-detector
-SensorConsumer
-      ↓ valida/decodifica SensorReading
-impressão no terminal
+SensorSimulator → SensorProducer → Kafka: sensor-readings
+    → SensorConsumer → decode/validação → RuleBasedAnomalyDetector
+    → NORMAL ou ANOMALY no terminal
 ```
 
-O producer chama `SensorSimulator.generate_reading()`, serializa o objeto por `to_json()` e envia a mensagem ao Kafka. O consumer lê `sensor-readings`, decodifica UTF-8, constrói uma instância por `SensorReading.from_json()` e imprime sensor, temperatura, umidade e pressão. O grupo configurado no consumer se chama `anomaly-detector`, mas não há detector implementado.
+O producer serializa `SensorReading.to_json()` e aguarda confirmação Kafka.
+O consumer usa `process_message()` para decodificar UTF-8, construir/validar o
+modelo e classificar. `consume_messages()` reporta e ignora eventos inválidos,
+continuando o consumo. Nenhum resultado é persistido ou publicado em outro tópico.
 
-Producer e consumer consultam `KAFKA_BOOTSTRAP_SERVERS` por meio de `src/kafka_config.py`. O padrão é `kafka:29092`, listener interno anunciado pelo Compose. O serviço `dev-env` define esse valor explicitamente. Para execução no host, pode-se definir `KAFKA_BOOTSTRAP_SERVERS=localhost:9092`, listener externo publicado pelo Compose. A política `enable_auto_commit=True` permanece inalterada nesta etapa.
+## Contrato de evento v1
 
-## Infraestrutura de desenvolvimento
+| Campo | Contrato |
+| --- | --- |
+| event_id | Texto não vazio; UUID v4 automático na criação local, preservado no round trip |
+| sensor_id | Texto não vazio |
+| timestamp | ISO 8601 com UTC explícito (`Z` ou `+00:00`); criação usa UTC atual |
+| temperature | Número finito, °C |
+| humidity | Número finito, % |
+| pressure | Número finito, hPa |
+| source | Texto não vazio; padrão local `simulator` |
+| schema_version | Inteiro 1; booleanos e outras versões rejeitados |
 
-`docker/docker-compose.yml` define:
+Os oito campos são obrigatórios no JSON. Campos desconhecidos são rejeitados.
+A construção local anterior continua possível graças aos defaults dos novos
+campos. Mensagens antigas sem metadados são ignoradas: não se inventa identidade
+no consumo. O produtor é responsável pela unicidade; não há deduplicação nem
+verificação global de IDs. Identificadores externos não precisam ser UUIDs.
 
-- ZooKeeper na porta interna `2181`;
-- Kafka com listener interno em `29092` e externo publicado em `9092`;
-- `dev-env`, construído a partir de `docker/Dockerfile`, com o repositório montado em `/app` e portas publicadas para Jupyter (`8888`) e Streamlit (`8501`).
+Validação responde se o evento respeita o contrato: não aceita textos numéricos,
+booleanos, NaN ou infinitos. Não impõe limites físicos ou limites do detector.
+Detecção responde se um evento válido está fora das faixas configuradas.
 
-O comando padrão do Dockerfile inicia Jupyter Lab. Kafka tem um healthcheck que consulta o broker e `dev-env` aguarda Kafka ficar saudável por `depends_on: condition: service_healthy`. Kafka e ZooKeeper se comunicam conforme configurado no Compose.
+## Detector de regras v1.0.0
 
-## Código fora do pipeline
+`DEFAULT_RULES` em `src/detectors/anomaly_detector.py` centraliza as faixas
+inclusivas. Um valor exatamente no limite é normal. O construtor aceita regras
+personalizadas e copia a configuração para uma tupla de regras imutáveis.
+`process_message()` aceita um detector injetado; `consume_messages()` cria um
+detector por laço quando não recebe um e o reutiliza entre mensagens.
 
-`src/ingestion.py` consulta a API externa Array of Things e retorna observações em um DataFrame. Não é chamado pelo producer/consumer atual. `src/api/`, `src/dashboard/` e `src/detectors/` contêm apenas inicializadores vazios nesta revisão.
+| Variável | Faixa normal | Extremos injetados pelo simulador |
+| --- | --- | --- |
+| temperature | 20–30 °C | 60–100 °C |
+| humidity | 40–75% | 90–100% |
+| pressure | 1000–1025 hPa | 850–930 hPa |
 
-## Componentes futuros
+Essas faixas reproduzem os intervalos normais sintéticos existentes, garantindo
+que todos os extremos deliberados sejam detectáveis. Valores inferiores ou
+superiores à faixa disparam `below_minimum` ou `above_maximum`.
 
-Detector de anomalias, persistência, API do projeto e dashboard são **FUTUROS / NÃO IMPLEMENTADOS**. Nenhum deles participa do fluxo atual. Testes unitários e um teste de integração opt-in foram adicionados, mas não foram executados neste ambiente: pytest e kafka-python não estão instalados e o daemon Docker não está acessível. O Compose foi validado estaticamente; isso não confirma execução ponta a ponta.
+`DetectionResult` contém `event_id`, `is_anomaly`, todas as `violations`,
+`detector_name`, `detector_version` e `detected_at` UTC. Cada violação registra
+variável, valor observado, mínimo, máximo e regra violada. `to_dict()` produz
+um objeto serializável com lista de violações; internamente usa tupla imutável.
+
+O detector valida defensivamente a entrada. Não aprende, não usa histórico,
+não considera contexto por sensor nem correlação entre variáveis. Os limites
+servem aos dados sintéticos e não constituem calibração para sensores reais.
+
+## Configuração e infraestrutura preservadas
+
+Producer e consumer usam `KAFKA_BOOTSTRAP_SERVERS` via `src/kafka_config.py`:
+`kafka:29092` no Compose e `localhost:9092` para o host. O consumer mantém
+`group_id=anomaly-detector`, `auto_offset_reset=earliest` e `enable_auto_commit=True`.
+
+O Compose mantém ZooKeeper (2181), Kafka (listener interno 29092, externo 9092)
+e `dev-env` (Jupyter 8888, porta 8501 publicada). O Dockerfile inicia Jupyter Lab.
+O healthcheck Kafka condiciona a inicialização de `dev-env`. Nenhuma imagem,
+versão, porta, volume ou topologia foi alterada.
+
+`src/ingestion.py` permanece um experimento independente com a API Array of Things.
+API e dashboard do projeto não estão implementados. ML, Data Lake, Parquet,
+DuckDB, banco de dados e persistência de resultados não integram este pipeline.

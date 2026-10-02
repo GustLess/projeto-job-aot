@@ -1,3 +1,4 @@
+from src.detectors.anomaly_detector import RuleBasedAnomalyDetector
 from src.collectors import simulator as simulator_module
 from src.collectors.simulator import SensorSimulator
 
@@ -18,6 +19,8 @@ def test_generate_reading_uses_configured_sensor_and_normal_measurements(
     assert reading.humidity == 60.46
     assert reading.pressure == 1010.79
     assert reading.source == "simulator"
+    reading.validate()
+    assert not RuleBasedAnomalyDetector().detect(reading).is_anomaly
 
 
 def test_generate_reading_can_select_each_anomaly_branch(monkeypatch):
@@ -33,3 +36,13 @@ def test_generate_reading_can_select_each_anomaly_branch(monkeypatch):
         reading = SensorSimulator(anomaly_probability=1).generate_reading()
 
         assert getattr(reading, branch) == expected
+        result = RuleBasedAnomalyDetector().detect(reading)
+        assert [v.variable for v in result.violations] == [branch]
+
+
+def test_normal_range_endpoints(monkeypatch):
+    for index in (0, 1):
+        monkeypatch.setattr(simulator_module.random, "uniform", lambda low, high: (low, high)[index])
+        reading = SensorSimulator(anomaly_probability=0).generate_reading()
+        reading.validate()
+        assert not RuleBasedAnomalyDetector().detect(reading).is_anomaly

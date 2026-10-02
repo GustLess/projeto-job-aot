@@ -1,4 +1,7 @@
 import sys
+import json
+
+from src.detectors.anomaly_detector import RuleBasedAnomalyDetector, DetectionResult
 
 from kafka import KafkaConsumer
 from kafka.errors import KafkaError
@@ -30,6 +33,29 @@ def deserialize_reading(value: bytes) -> SensorReading:
         raise ValueError(f"mensagem inválida: {error}") from error
 
 
+def process_message(
+    value: bytes, detector: RuleBasedAnomalyDetector | None = None,
+) -> DetectionResult:
+    """Decodifica, valida e classifica, sem efeitos externos."""
+    reading = deserialize_reading(value)
+    if detector is None:
+        detector = RuleBasedAnomalyDetector()
+    return detector.detect(reading)
+
+
+def consume_messages(consumer, detector: RuleBasedAnomalyDetector | None = None) -> None:
+    if detector is None:
+        detector = RuleBasedAnomalyDetector()
+    for message in consumer:
+        try:
+            result = process_message(message.value, detector)
+        except ValueError as error:
+            print(f"Mensagem ignorada: {error}", file=sys.stderr)
+            continue
+        status = "ANOMALY" if result.is_anomaly else "NORMAL"
+        print(f"{status} | {json.dumps(result.to_dict(), ensure_ascii=False)}")
+
+
 if __name__ == "__main__":
     consumer = None
 
@@ -38,19 +64,7 @@ if __name__ == "__main__":
         print(f"Consumer iniciado. Lendo dados de '{TOPIC}'.")
         print("Ctrl+C para parar.\n")
 
-        for message in consumer:
-            try:
-                reading = deserialize_reading(message.value)
-            except ValueError as error:
-                print(f"Mensagem ignorada: {error}", file=sys.stderr)
-                continue
-
-            print(
-                f"Sensor: {reading.sensor_id} | "
-                f"Temperatura: {reading.temperature} °C | "
-                f"Umidade: {reading.humidity}% | "
-                f"Pressão: {reading.pressure} hPa"
-            )
+        consume_messages(consumer)
 
     except KeyboardInterrupt:
         print("\nConsumer encerrado.")

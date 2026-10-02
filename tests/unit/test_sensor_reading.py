@@ -50,14 +50,67 @@ def test_validate_rejects_blank_required_text(field):
     "payload, error",
     [
         ("{invalid", json.JSONDecodeError),
-        ('{"sensor_id":"sensor-001"}', TypeError),
+        ('{"sensor_id":"sensor-001"}', ValueError),
         (
             '{"sensor_id":null,"timestamp":"t","temperature":1,'
             '"humidity":2,"pressure":3}',
-            (AttributeError, TypeError),
+            (AttributeError, ValueError),
         ),
     ],
 )
 def test_from_json_rejects_invalid_payload(payload, error):
     with pytest.raises(error):
         SensorReading.from_json(payload)
+
+
+def test_complete_contract_and_unique_ids():
+    from datetime import datetime, timedelta
+    from uuid import UUID
+    first = SensorReading.create('s', 25, 50, 1010)
+    second = SensorReading.create('s', 25, 50, 1010)
+    assert first.event_id != second.event_id
+    assert UUID(first.event_id).version == 4
+    assert first.schema_version == 1
+    assert datetime.fromisoformat(first.timestamp).utcoffset() == timedelta(0)
+    assert set(first.to_dict()) == {'event_id', 'sensor_id', 'timestamp', 'temperature',
+                                    'humidity', 'pressure', 'source', 'schema_version'}
+    reading = make_reading(event_id='external-event', timestamp='2026-01-02T03:04:05Z')
+    assert SensorReading.from_json(reading.to_json()) == reading
+
+
+@pytest.mark.parametrize('field,value', [
+    ('event_id', ''), ('event_id', None), ('sensor_id', 123), ('source', []),
+    ('timestamp', 'invalid'), ('timestamp', '2026-01-02T03:04:05'),
+    ('timestamp', '2026-01-02T03:04:05+03:00'),
+    ('schema_version', 2), ('schema_version', True), ('schema_version', '1'),
+    ('temperature', '25'), ('humidity', True), ('pressure', None),
+    ('temperature', float('nan')), ('humidity', float('inf')),
+    ('pressure', float('-inf')),
+])
+def test_invalid_fields(field, value):
+    with pytest.raises(ValueError):
+        make_reading(**{field: value}).validate()
+
+
+@pytest.mark.parametrize('field', list(SensorReading.__dataclass_fields__))
+def test_wire_contract_requires_all_fields(field):
+    data = make_reading().to_dict()
+    del data[field]
+    with pytest.raises(ValueError, match='campos obrigatórios'):
+        SensorReading.from_json(json.dumps(data))
+
+
+@pytest.mark.parametrize('payload', ['null', '[]', '42', '"text"'])
+def test_wire_contract_requires_object(payload):
+    with pytest.raises(ValueError):
+        SensorReading.from_json(payload)
+
+
+def test_extreme_finite_measurements_are_valid():
+    make_reading(temperature=-999, humidity=200, pressure=0).validate()
+
+
+@pytest.mark.parametrize('value', [True, '25', None, float('nan')])
+def test_create_does_not_coerce_invalid_measurements(value):
+    with pytest.raises(ValueError):
+        SensorReading.create('s', value, 50, 1010)
